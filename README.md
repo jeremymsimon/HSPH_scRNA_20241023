@@ -1,6 +1,8 @@
 # Introduction to scRNA-seq and Data Preprocessing
 Dana-Farber Cancer Institute Department of Data Sciences 
+
 Harvard Chan Bioinformatics Core (HBC)
+
 Training Workshop, 10/23/2024  
 
 Jeremy M. Simon, Ph.D  

@@ -1,0 +1,296 @@
+---
+title: "Introduction to scRNA-seq and data preprocessing"
+subtitle: "Harvard Chan Bioinformatics Core (HBC) & DFCI Department of Data Science"
+date: 2024-10-23
+author: 
+  name: "Jeremy M. Simon"
+  affiliation: 
+    - "Dana-Farber Cancer Institute, Department of Data Science"
+    - "Harvard T.H. Chan School of Public Health, Department Biostatistics"
+  url: https://github.com/jeremymsimon/HSPH_scRNA_20241023/ 
+abstract: |
+  There are many useful applications of single-cell or single-nucleus RNA-seq technologies to better understand cancer biology. 
+  In this introductory workshop, we will discuss some of the advantages of adopting single-cell approaches, 
+  frequently utilized technologies/platforms, best practices for experimental design, and provide an overview of algorithms used for data preprocessing. 
+  We will then provide an interactive demonstration of single-cell/single-nucleus RNA-seq data preprocessing with `alevin-fry`, 
+  resulting in a counts matrix ready for downstream analysis. 
+  **This workshop assumes some level of R and unix/linux knowledge**  
+format:
+  html:
+    embed-resources: true
+    toc: true
+    theme: sandstone
+editor: visual
+---
+
+# Background reading and other resources
+A selection of just some of the many great resources out there, this is by no means a comprehensive list
+
+* <https://www.sc-best-practices.org/preamble.html>
+* <https://bioconductor.org/books/3.17/OSCA/>
+* <https://r4ds.hadley.nz/>
+* <http://rafalab.dfci.harvard.edu/dsbook/>
+* <https://hbctraining.github.io/scRNA-seq_online/schedule/links-to-lessons.html>
+* <https://combine-lab.github.io/alevin-fry-tutorials/#blog>
+
+# Software requirements
+These are the minimum requirements, and depending on your system architecture, your needed configuration may vary. 
+I encourage you to discuss with your systems administrator as configuration on a HPC cluster is likely needed anyway for large data
+
+Note we will run these steps individually, which for many samples could be tedious. 
+You may consider the rust wrapper [`simpleaf`](https://github.com/COMBINE-lab/simpleaf) or the nextflow [nf-core single-cell RNAseq pipeline](https://nf-co.re/scrnaseq) instead for larger data
+
+## piscem
+* <https://github.com/COMBINE-lab/piscem>
+* <https://github.com/COMBINE-lab/piscem/releases/tag/v0.10.3>
+* Alternatively, there is a parallel path you could follow via `salmon alevin` <https://github.com/COMBINE-lab/salmon>, which would be run with `--sketch` and `--rad`
+
+## roers
+* <https://github.com/COMBINE-lab/roers>
+* First [install Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html) 
+* Then run `cargo install roers` 
+
+## alevin-fry
+* <https://alevin-fry.readthedocs.io/en/latest/index.html>
+* <https://github.com/COMBINE-lab/alevin-fry>
+* `conda install alevin-fry`
+
+## others
+* Somewhere along the way I needed to run `brew install gfortran openblas pkg-config` followed by `export PKG_CONFIG_PATH="/opt/homebrew/opt/openblas/lib/pkgconfig"` to get scikit-learn to work
+
+## R packages
+* `fishpond`
+* `SingleCellExperiment`
+* `Seurat`
+* `Matrix`
+* `tidyverse`
+
+```{r}
+#| eval: false
+BiocManager::install("fishpond")
+BiocManager::install("SingleCellExperiment")
+install.packages("Seurat")
+install.packages("Matrix")
+install.packages("tidyverse")
+```
+
+# Set up unix/linux workspace
+## Make working directory
+```{bash}
+#| eval: false
+mkdir HSPH_scRNA_20241023
+cd HSPH_scRNA_20241023
+```
+
+## Retrieve example dataset
+10X 1k PBMC from a healthy donor, 3' V3 chemistry, [available here](https://www.10xgenomics.com/datasets/1-k-pbm-cs-from-a-healthy-donor-v-3-chemistry-3-standard-3-0-0)
+```{bash}
+# Download 10x FASTQ files
+curl -s -O https://cf.10xgenomics.com/samples/cell-exp/3.0.0/pbmc_1k_v3/pbmc_1k_v3_fastqs.tar
+
+# Un-tar FASTQ files
+tar -xvf pbmc_1k_v3_fastqs.tar
+```
+
+### Peek at one of the R1 files
+
+```{bash}
+zcat < pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L001_R1_001.fastq.gz | head -n 24
+```
+
+### Peek at one of the R2 files
+
+```{bash}
+zcat < pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L001_R2_001.fastq.gz | head -n 24
+```
+
+## Retrieve reference genome and gene annotations
+Links are sourced from [GENCODE website](https://www.gencodegenes.org/human/)
+
+```{bash}
+# Download GENCODE GTF of gene annotations
+curl -s -O https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/gencode.v45.annotation.gtf.gz
+
+# Download reference genome sequence
+curl -s -O https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_45/GRCh38.primary_assembly.genome.fa.gz
+
+# Unzip both files
+gunzip GRCh38.primary_assembly.genome.fa.gz
+gunzip gencode.v45.annotation.gtf.gz
+```
+
+# Prepare reference annotation index
+## Generate splici annotation
+```{bash}
+# Run roers 
+roers make-ref -a intronic --filename-prefix splici_roers GRCh38.primary_assembly.genome.fa gencode.v45.annotation.gtf gencode.v45.annotation_splici_roers
+
+```
+
+## Create piscem index of splici annotation
+This takes about an hour on my machine, would recommend this be run in a HPC environment
+```{bash}
+# Increase number of simultaneous open filehandles
+ulimit -n 2048
+
+# Run piscem build
+piscem build \
+	-s gencode.v45.annotation_splici_roers/splici_roers.fa \
+	--output gencode.v45.annotation_splici_roers_piscem_idx \
+	-t 4 2> gencode.v45.annotation_splici_roers_piscem_idx.log
+
+```
+
+# Count transcripts per cells with `piscem` and `alevin-fry`
+## Run `piscem`
+As noted in the presentation, the chemistry (V2 vs V3) and orientation (5' or 3') impacts these steps and it is easy to configure things incorrectly. 
+Verify all information from your sequencing facility prior to proceeding
+```{bash}
+piscem map-sc \
+  -i gencode.v45.annotation_splici_roers_piscem_idx \
+  -1 pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L001_R1_001.fastq.gz,pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L002_R1_001.fastq.gz \
+  -2 pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L001_R2_001.fastq.gz,pbmc_1k_v3_fastqs/pbmc_1k_v3_S1_L002_R2_001.fastq.gz \
+  --geometry chromium_v3 \
+  -o 1k_PBMC_piscem_out \
+  -t 4
+```
+
+## Run `alevin-fry generate-permit-list`
+Note `-d fw` for 10x 3' v3 chemistry
+
+```{bash}
+alevin-fry generate-permit-list \
+  -d fw \
+  -k \
+  -i 1k_PBMC_piscem_out \
+  -o 1k_PBMC_alevin_quant
+```
+
+## Run `alevin-fry collate`
+
+```{bash}
+alevin-fry collate \
+  -r 1k_PBMC_piscem_out \
+  -i 1k_PBMC_alevin_quant \
+  -t 4
+```
+
+### Peek at our RAD file with `alevin-fry view`
+```{bash}
+alevin-fry view -r 1k_PBMC_piscem_out/map.rad | head
+```
+
+## Run `alevin-fry quant`
+
+```{bash}
+alevin-fry quant \
+  -m gencode.v45.annotation_splici_roers/t2g_3col.tsv \
+  -i 1k_PBMC_alevin_quant \
+  -o 1k_PBMC_alevin_quant_crlike \
+  -r cr-like \
+  -t 4 \
+  --use-mtx
+```
+
+### Count how many cells we detected
+
+```{bash}
+wc -l 1k_PBMC_alevin_quant_crlike/alevin/quants_mat_rows.txt 
+```
+
+# Import `alevin-fry` counts into R with `fishpond::loadFry()`
+
+```{r}
+#| warning: false
+#| error: false
+library(fishpond)
+library(SingleCellExperiment)
+library(Seurat)
+library(Matrix)
+library(tidyverse)
+
+Sample1_RNA <- loadFry("1k_PBMC_alevin_quant_crlike", 
+	outputFormat = "snRNA")
+	
+# Peek at counts
+counts(Sample1_RNA)[1:5,1:5]
+dim(counts(Sample1_RNA))
+```
+
+# Collapse gene IDs to gene symbols
+Note there are some duplicated gene symbols, mainly due to the chrY PAR
+```{r}
+tx2gene <- read.table("gencode.v45.annotation_splici_roers/gene_id_to_name.tsv",
+                      header = FALSE,
+                      sep = "\t",
+                      col.names = c("tx","gene"))
+
+# Use matrix multiplication to group and sum counts by gene symbol
+exp.txId <- rownames(counts(Sample1_RNA))
+exp.geneId <- as.vector(tx2gene$gene[match(exp.txId, tx2gene$tx)])
+exp.tx.grp <- t(sparse.model.matrix(~ 0 + exp.geneId))
+
+Sample1_RNA.summarized <- exp.tx.grp %*% counts(Sample1_RNA)
+rownames(Sample1_RNA.summarized) <- rownames(Sample1_RNA.summarized) %>% str_replace_all(".+.geneId","")
+
+# Peek at counts again
+Sample1_RNA.summarized[1:5,1:5]
+dim(Sample1_RNA.summarized)
+```
+
+# Follow basic Seurat workflow
+
+```{r}
+#| warning: false
+pbmc.seurat <- CreateSeuratObject(Sample1_RNA.summarized)
+
+# Compute mitochondrial contribution per cell and filter out poor quality cells
+# Note: My preferred approach here is to use [`MiQC`](https://bioconductor.org/packages/release/bioc/html/miQC.html) rather than set a hard `percent.mt` cutoff
+pbmc.seurat <- PercentageFeatureSet(pbmc.seurat, 
+                                    pattern = "^MT-", # Uses all gene names that begin with "MT-"
+                                    col.name = "percent.mt")		
+pbmc.seurat <- subset(pbmc.seurat, subset = nCount_RNA > 500 & nCount_RNA < 25000 & nFeature_RNA > 250 & percent.mt < 10)
+dim(pbmc.seurat)
+
+# Normalize and scale data
+pbmc.seurat <- NormalizeData(pbmc.seurat)
+pbmc.seurat <- FindVariableFeatures(pbmc.seurat, 
+                                    selection.method = "vst", 
+                                    nfeatures = 2000)
+pbmc.seurat <- ScaleData(pbmc.seurat)
+
+# Run PCA and select "significant" PCs
+pbmc.seurat <- RunPCA(pbmc.seurat, npcs = 50)
+ElbowPlot(pbmc.seurat, ndims = 50)
+
+# Identify clusters
+pbmc.seurat <- FindNeighbors(pbmc.seurat, dims = 1:15, reduction = "pca")
+pbmc.seurat <- FindClusters(pbmc.seurat, resolution = 0.5, algorithm = 2)
+
+# Visualize with UMAP
+pbmc.seurat <- RunUMAP(pbmc.seurat, dims = 1:15)
+DimPlot(pbmc.seurat, reduction = "umap", label = TRUE)
+```
+
+# Visualize known key features
+```{r}
+#| fig-width: 12
+#| fig-height: 10
+FeaturePlot(pbmc.seurat, 
+	features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A"),
+	order = TRUE
+	)
+
+VlnPlot(pbmc.seurat, 
+	features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A"),
+	sort = TRUE,
+	flip = TRUE,
+	stack = TRUE
+) + NoLegend()
+```
+
+# Get R session info
+
+```{r}
+sessionInfo()
+```
