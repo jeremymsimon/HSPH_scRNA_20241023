@@ -43,11 +43,13 @@ You may consider the rust wrapper [`simpleaf`](https://github.com/COMBINE-lab/si
 ## piscem
 * <https://github.com/COMBINE-lab/piscem>
 * <https://github.com/COMBINE-lab/piscem/releases/tag/v0.10.3>
+* `conda install piscem` will work for many users
 * Alternatively, there is a parallel path you could follow via `salmon alevin` <https://github.com/COMBINE-lab/salmon>, which would be run with `--sketch` and `--rad`
 
 ## roers
 * <https://github.com/COMBINE-lab/roers>
-* First [install Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html) 
+* First [install Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+* You may need to add the installation directory to your `$PATH` environmental variable, e.g. add `export PATH=$PATH:/Users/jsimon/.local/bin` to your `.bashrc` or `.bash_profile`
 * Then run `cargo install roers` 
 
 ## alevin-fry
@@ -145,6 +147,9 @@ piscem build \
 ## Run `piscem`
 As noted in the presentation, the chemistry (V2 vs V3) and orientation (5' or 3') impacts these steps and it is easy to configure things incorrectly. 
 Verify all information from your sequencing facility prior to proceeding
+
+More information on `geometry` parameter and possible specifications [here](https://github.com/COMBINE-lab/piscem/blob/main/README.md#geometry)
+
 ```{bash}
 piscem map-sc \
   -i gencode.v45.annotation_splici_roers_piscem_idx \
@@ -156,7 +161,7 @@ piscem map-sc \
 ```
 
 ## Run `alevin-fry generate-permit-list`
-Note `-d fw` for 10x 3' v3 chemistry
+Note `-d fw` for 10x 3' v3 chemistry. For v2 chemistry (including 5'), switch to `-d rc`. More information [here](https://github.com/COMBINE-lab/alevin-fry/issues/118)
 
 ```{bash}
 alevin-fry generate-permit-list \
