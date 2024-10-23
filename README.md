@@ -18,8 +18,9 @@ algorithms used for data preprocessing. We will then provide an interactive demo
 [10X Genomics, 1k PBMC, 3' V3 chemistry](https://www.10xgenomics.com/datasets/1-k-pbm-cs-from-a-healthy-donor-v-3-chemistry-3-standard-3-0-0)
 
 # Contents
-Powerpoint slides, quarto markdown containing all (bash, R) code
-HTML containing markdown and figures deployed [here](https://jeremymsimon.github.io/HSPH_scRNA_20241023/HSPH_scRNA_20241023.html)
+* Powerpoint slides
+* `quarto` markdown containing all (bash, R) code
+* HTML containing markdown and figures deployed [here](https://jeremymsimon.github.io/HSPH_scRNA_20241023/HSPH_scRNA_20241023.html)
 
 # External links
 This section will be updated after the workshop has concluded
